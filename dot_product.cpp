@@ -53,7 +53,7 @@ int main()
 
         // Creating the kernel
         auto dot_product = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer>(dot_pr_kernel, "dot_product");
-        auto reduction = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::LocalSpaceArg>(reduction_kernel, "reduction");
+        auto reduction = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::LocalSpaceArg, int>(reduction_kernel, "reduction");
 
         //auto workgroupsize = kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(device);
 
@@ -61,22 +61,35 @@ int main()
 // ############################################################################ 
 // Creating the vectors and variables
 
-        constexpr int size = 256;
+        constexpr int size = 256*256;
+        constexpr int workgroupsize = 256;
         auto cpu_result = 0;
-        int workgroupsize = 256;
         int zeros_to_fill;
+
+        int number_of_intermediate_iterations = size/workgroupsize;
+        //int number_of_iterations = 
 
         std::vector<int> vec1(size);
         std::vector<int> vec2(size);
         std::vector<int> result_vec(size);
-        std::vector<int> result_vec2(size);
-        std::vector<int> temp(size);
+        std::vector<int> result2(workgroupsize, 0);
+        std::vector<int> result3(workgroupsize, 0);
 
         // Filling up the vectors
         for (int i = 0; i < vec1.size(); ++i)
         {
-            vec1[i] = i+1;
-            vec2[i] = i+1;
+            if ( i % 2 == 0)
+            {
+                vec1[i] = 1;
+                vec2[i] = 1;
+            }
+            else
+            {
+                vec1[i] = 1;
+                vec2[i] = 1;            
+            }
+            
+
         }
 
         // Checking the length of the vectors and filling them up with zeros
@@ -88,7 +101,6 @@ int main()
         vec1.insert( vec1.end(), vec_zeros.begin(), vec_zeros.end() );
         vec2.insert( vec2.end(), vec_zeros.begin(), vec_zeros.end() );
 
-        int number_of_iterations = vec1.size()/workgroupsize;
 
 // ############################################################################   
 // Creating buffers, copying to the GPU, measuring time 
@@ -97,8 +109,6 @@ int main()
         cl::Buffer buf_vec1{ std::begin(vec1), std::end(vec1), true };
         cl::Buffer buf_vec2{ std::begin(vec2), std::end(vec2), true };
         cl::Buffer buf_result_vec {std::begin(result_vec), std::end(result_vec), false };
-        cl::Buffer buf_result_vec2 {std::begin(result_vec2), std::end(result_vec2), false };
-        cl::Buffer buf_temp {std::begin(temp), std::end(temp), false };
 
         // Explicit (blocking) dispatch of data before launch
         cl::copy(queue, std::begin(vec1), std::end(vec1), buf_vec1);
@@ -108,35 +118,51 @@ int main()
         // Launch kernels
         dot_product(cl::EnqueueArgs{queue, cl::NDRange{size}}, buf_vec1, buf_vec2, buf_result_vec);
 
+        // Finishing kernels
         cl::finish();
 
         // (Blocking) fetch of results
         cl::copy(queue, buf_result_vec, std::begin(result_vec), std::end(result_vec));
-
         cl::copy(queue, std::begin(result_vec), std::end(result_vec), buf_result_vec);
-        //cl::copy(queue, std::begin(result_vec2), std::end(result_vec2), buf_result_vec2);
-        //cl::copy(queue, std::begin(temp), std::end(temp), buf_temp);
 
 
 // ############################################################################ 
-// Launch kernels
-/*
-        for (int i = 0; i < workgroupsize; ++i)
+// Launching kernels
+
+        
+
+        for (int i = 0; i < number_of_intermediate_iterations; ++i)
         {
-            std::vector<int> sub_vec = slice(result_vec, i*256, 256*(i+1));
+            std::vector<int> sub_vec = slice(result_vec, i*workgroupsize, workgroupsize*(i+1));
 
+            cl::Buffer buf_sub_vec {std::begin(sub_vec), std::end(sub_vec), true };
+            cl::Buffer buf_result2 {std::begin(result2), std::end(result2), true };
 
+            cl::copy(queue, std::begin(sub_vec), std::end(sub_vec), buf_sub_vec);
+            cl::copy(queue, std::begin(result2), std::end(result2), buf_result2);
+
+            reduction(cl::EnqueueArgs{queue, cl::NDRange{workgroupsize}, cl::NDRange{workgroupsize}}, buf_sub_vec, buf_result2, cl::Local(workgroupsize*sizeof(float)), i);
+ 
+            cl::finish();
+
+            cl::copy(queue, buf_result2, std::begin(result2), std::end(result2));
 
         }
-*/
-        reduction(cl::EnqueueArgs{queue, cl::NDRange{size}, cl::NDRange{size}}, buf_result_vec, buf_result_vec2, cl::Local(size*sizeof(float)));
 
+        cl::Buffer buf_result2 {std::begin(result2), std::end(result2), false };
+        cl::Buffer buf_result3 {std::begin(result3), std::end(result3), true };
+
+        cl::copy(queue, std::begin(result2), std::end(result2), buf_result2);
+        cl::copy(queue, std::begin(result3), std::end(result3), buf_result3);
+
+        
+        reduction(cl::EnqueueArgs{queue, cl::NDRange{workgroupsize}, cl::NDRange{workgroupsize}}, buf_result2, buf_result3, cl::Local(workgroupsize*sizeof(float)), 0);
+        
         cl::finish();
 
         // (Blocking) fetch of results
-        cl::copy(queue, buf_result_vec2, std::begin(temp), std::end(temp));       
-
-
+        cl::copy(queue, buf_result3, std::begin(result3), std::end(result3));       
+        
 
 // ############################################################################ 
 // Doing the same calculation on the CPU
@@ -150,8 +176,9 @@ int main()
 // Printing the result vector
 
         std::cout << std::endl << "The CPU result is: " << cpu_result << ".";
-        std::cout << std::endl << "The GPU result is: " << temp[0] << "." << std::endl; 
+        std::cout << std::endl << "The GPU result is: " << result3[0] << ".";
     }
+
 // ############################################################################
 // If kernel failed to build
 

@@ -1,4 +1,4 @@
-__kernel void reduction(__global int* source, __global int* result, __local int* temporary) 
+__kernel void reduction(__global int* source, __global int* result, __local int* temporary, int index) 
 {
     // each thread loads one element from global to shared mem
     unsigned int gid = get_local_id(0);
@@ -19,5 +19,5 @@ __kernel void reduction(__global int* source, __global int* result, __local int*
     }
     
     // write result for this block to global mem
-    if(gid == 0){ result[0] = temporary[0]; }
+    if(gid == 0){ result[index] = temporary[0]; }
 }
