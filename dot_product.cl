@@ -1,4 +1,4 @@
-__kernel void dot_product(__global int* x, __global int* y, __global int* result_vec)
+__kernel void dot_product(__global float* x, __global float* y, __global float* result_vec)
 {
     int gid = get_global_id(0);
 

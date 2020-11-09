@@ -50,30 +50,26 @@ int main()
 // ############################################################################ 
 // Creating the vectors and variables
 
-        constexpr int size = 1;
+        constexpr int size = 256*256*256;
         constexpr int workgroupsize = 256;
-        auto cpu_result = 0;
+        float cpu_result = 0;
         int zeros_to_fill = workgroupsize - (size % workgroupsize);
 
-        std::vector<int> vec_zeros(zeros_to_fill, 0);
-        std::vector<int> vec1(size);
-        std::vector<int> vec2(size);
-        std::vector<int> final_res(workgroupsize);
+        std::vector<float> vec_zeros(zeros_to_fill, 0.0f);
+        std::vector<float> vec1(size);
+        std::vector<float> vec2(size);
+        std::vector<float> final_res(workgroupsize);
 
-        // Filling up the vectors
-        for (int i = 0; i < vec1.size(); ++i)
-        {
-            if ( i % 2 == 0)
-            {
-                vec1[i] = 1;
-                vec2[i] = 1;
-            }
-            else
-            {
-                vec1[i] = 1;
-                vec2[i] = 1;            
-            }
-        }
+
+        // Algorithm for uniform distribution between -1 and 1
+        std::random_device rnd_device;
+        std::mt19937 mersenne_engine(rnd_device());
+        std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+        auto gen = [&]() { return dist(mersenne_engine); };
+
+        // Filling up the A and B matrices with random uniform distribution
+        std::generate(vec1.begin(), vec1.end(), gen); 
+        std::generate(vec2.begin(), vec2.end(), gen);
 
         // Checking the length of the vectors and filling them up with zeros
         // So their length is n*256 (workgroup size)
@@ -81,8 +77,7 @@ int main()
         vec1.insert( vec1.end(), vec_zeros.begin(), vec_zeros.end() );
         vec2.insert( vec2.end(), vec_zeros.begin(), vec_zeros.end() );
 
-        std::vector<int> result_vec(vec1.size());
-        std::vector<int> result2(workgroupsize, 0);
+        std::vector<float> result_vec(vec1.size());
 
 // ############################################################################   
 // Creating buffers, copying to the GPU, measuring time 
@@ -91,6 +86,8 @@ int main()
         cl::Buffer buf_vec1{ std::begin(vec1), std::end(vec1), true };
         cl::Buffer buf_vec2{ std::begin(vec2), std::end(vec2), true };
         cl::Buffer buf_result_vec {std::begin(result_vec), std::end(result_vec), false };
+
+        auto time_gpu_start = std::chrono::high_resolution_clock::now();
 
         // Explicit (blocking) dispatch of data before launch
         cl::copy(queue, std::begin(vec1), std::end(vec1), buf_vec1);
@@ -112,21 +109,17 @@ int main()
 
         int num_of_it =  floor( log(size)/log(256) );
 
-        std::cout << num_of_it << std::endl;
-
         for (int i=0; i < num_of_it + 1; ++i)
         {
-            std::cout << i << std::endl;
-
             if(result_vec.size() % workgroupsize != 0)
             {
                 int zeros_to_fill2 = workgroupsize - (result_vec.size() % workgroupsize);
-                std::vector<int> vec_zeros2(zeros_to_fill2, 0);
+                std::vector<float> vec_zeros2(zeros_to_fill2, 0.0f);
                 result_vec.insert( result_vec.end(), vec_zeros2.begin(), vec_zeros2.end() );
 
             }
 
-            std::vector<int> result3(result_vec.size(), 0);
+            std::vector<float> result3(result_vec.size(), 0.0f);
 
             cl::Buffer buf_result {std::begin(result_vec), std::end(result_vec), true };
             cl::Buffer buf_result3 {std::begin(result3), std::end(result3), false };
@@ -135,7 +128,7 @@ int main()
             cl::copy(queue, std::begin(result3), std::end(result3), buf_result3);
 
             
-            reduction(cl::EnqueueArgs{queue, cl::NDRange{vec1.size()}, cl::NDRange{workgroupsize}}, buf_result, buf_result3, cl::Local(workgroupsize*sizeof(int)));
+            reduction(cl::EnqueueArgs{queue, cl::NDRange{vec1.size()}, cl::NDRange{workgroupsize}}, buf_result, buf_result3, cl::Local(workgroupsize*sizeof(float)));
             
             cl::finish();
 
@@ -151,20 +144,35 @@ int main()
             
         }
 
+        auto time_gpu_end = std::chrono::high_resolution_clock::now();
+
 // ############################################################################ 
 // Doing the same calculation on the CPU
+
+        auto time_cpu_start = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < vec1.size(); ++i)
         {
             cpu_result += vec1[i]*vec2[i];
         }
 
+        auto time_cpu_end = std::chrono::high_resolution_clock::now();
+
 // ############################################################################ 
 // Printing the results
 
+        auto time_difference_cpu = std::chrono::duration_cast<std::chrono::microseconds>(time_gpu_end-time_gpu_start).count()/1000.0;  
+        auto time_difference_gpu = std::chrono::duration_cast<std::chrono::microseconds>(time_cpu_end-time_cpu_start).count()/1000.0;  
+
+        std::cout << std::fixed << std::setprecision(10);
+
         std::cout << std::endl << "The CPU result is: " << cpu_result << ".";
         std::cout << std::endl << "The GPU result is: " << final_res[0] << ".";
-        std::cout << std::endl;
+
+        std::cout << std::fixed << std::setprecision(0) << std::endl;
+
+        std::cout << std::endl << "The computational time for a " << size << " long vector dot product on the CPU: " << time_difference_cpu  << " milisec.";
+        std::cout << std::endl << "The computational time for a " << size << " long vector dot product on the GPU: " << time_difference_gpu  << " milisec." << std::endl;
 
     }
 
@@ -200,27 +208,3 @@ int main()
     }
 }
 
-
-
-/*
-
-        int zeros_to_fill = workgroupsize - (size % workgroupsize);
-        std::vector<int> vec_zeros(zeros_to_fill, 0);
-        result_vec.insert( result_vec.end(), vec_zeros.begin(), vec_zeros.end() );
-
-        int num_of_it =  floor( log(size)/log(256) );
-
-        std::cout << std::endl << num_of_it << std::endl;
-
-        int num_of_iterations = (size + zeros_to_fill)/256;
-
-        int new_len = result_vec.size()/256;
-        int zeros_to_fill2 = workgroupsize - (new_len % workgroupsize);
-        int new_size = new_len + zeros_to_fill2;
-
-        std::cout << std::endl << new_size << std::endl;
-
-        std::vector<int> result3(new_size, 0);
-
-
-*/

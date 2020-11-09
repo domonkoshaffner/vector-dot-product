@@ -1,5 +1,5 @@
 //__kernel void reduction(__global int* source, __global int* result, __local int* temporary, int index) 
-__kernel void reduction(__global int* data, __global int* result, __local int* localData) 
+__kernel void reduction(__global float* data, __global float* result, __local float* localData) 
 {
     int gid = get_global_id(0);        // id of the work item amongs every work items 
     int lid = get_local_id(0);         // id of the work item in the workgroup
