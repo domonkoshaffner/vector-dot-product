@@ -23,43 +23,40 @@ int main()
         cl::Device device = queue.getInfo<CL_QUEUE_DEVICE>();
 
         // Load program source
-        std::ifstream file1{ "C:/Users/haffn/Desktop/MSc-III/GPU-II/Projects/first project/dot_product.cl" };
         std::ifstream file2{ "C:/Users/haffn/Desktop/MSc-III/GPU-II/Projects/first project/red.cl" };
 
-
-        if (!file1.is_open())
-            throw std::runtime_error{ std::string{ "Cannot open kernel source: " } + "dot_product.cl" };
+        // if program failed to open
         if (!file2.is_open())
             throw std::runtime_error{ std::string{ "Cannot open kernel source: " } + "red.cl" };
 
         // Creating the program
-        cl::Program dot_pr_kernel{ std::string{ std::istreambuf_iterator<char>{ file1 }, std::istreambuf_iterator<char>{} } };
         cl::Program reduction_kernel{ std::string{ std::istreambuf_iterator<char>{ file2 }, std::istreambuf_iterator<char>{} } };
 
         //Building the program
-        dot_pr_kernel.build({ device });
         reduction_kernel.build({ device });
 
         // Creating the kernel
-        auto dot_product = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer>(dot_pr_kernel, "dot_product");
-        auto reduction = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::LocalSpaceArg>(reduction_kernel, "reduction");
-
-        //auto workgroupsize = kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(device);
-
+        auto reduction = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl::LocalSpaceArg, int, int, int>(reduction_kernel, "reduction");
 
 // ############################################################################ 
-// Creating vectors and variables
+// Creating the vectors, constants and buffers for the calcualtions
 
-        constexpr int size = 1000000;
+        // Creating the required variables
+        constexpr int size = 11111111;
         constexpr int workgroupsize = 256;
         float cpu_result = 0;
         int zeros_to_fill = workgroupsize - (size % workgroupsize);
+        int temp_zeros;
+        int temp_size;
+        size_t newsize;
 
+        // Creating the vectors
         std::vector<float> vec_zeros(zeros_to_fill, 0.0f);
         std::vector<float> vec1(size);
         std::vector<float> vec2(size);
-        std::vector<float> final_res(workgroupsize);
-
+        std::vector<float> vec3(size+zeros_to_fill);
+        std::vector<int> zeros;
+        std::vector<size_t> size_vec;
 
         // Algorithm for uniform distribution between -1 and 1
         std::random_device rnd_device;
@@ -76,81 +73,65 @@ int main()
         vec1.insert( vec1.end(), vec_zeros.begin(), vec_zeros.end() );
         vec2.insert( vec2.end(), vec_zeros.begin(), vec_zeros.end() );
 
-        // Creating the first result vector
-        std::vector<float> result_vec(vec1.size());
+        // Creating the buffers
+        cl::Buffer buf_vec1 {std::begin(vec1), std::end(vec1), true };
+        cl::Buffer buf_vec2 {std::begin(vec2), std::end(vec2), true };
+        cl::Buffer buf_vec3 {std::begin(vec3), std::end(vec3), true };
 
-// ############################################################################   
-// Creating buffers, copying to the GPU, measuring time 
-// First kernel: multiplication: vec1[n]*vec2[n]
+// ############################################################################
+//Calculating the iterations and the 0s we have to fil lthe results up with
 
-        // Creating buffers from the vectors
-        cl::Buffer buf_vec1{ std::begin(vec1), std::end(vec1), true };
-        cl::Buffer buf_vec2{ std::begin(vec2), std::end(vec2), true };
-        cl::Buffer buf_result_vec {std::begin(result_vec), std::end(result_vec), false };
+        int num_of_it =  ceil( log(size)/log(workgroupsize) );
+
+        zeros.push_back(0);
+        zeros.push_back(0);
+        size_vec.push_back(vec1.size());
+        size_vec.push_back(vec1.size());
+
+        for(int i=2; i<=num_of_it; ++i)
+        {
+            newsize = size_vec[i-1]/256;
+            temp_zeros = workgroupsize - (newsize % workgroupsize);
+            temp_size = newsize + temp_zeros;
+
+            zeros.push_back(temp_zeros);
+            size_vec.push_back(temp_size);
+        }
+
+        //zeros.push_back(254);
+        //size_vec.push_back(256);
+
+// ############################################################################
+// Calling the kernels
 
         // Starting the clock
         auto time_gpu_start = std::chrono::high_resolution_clock::now();
 
-        // Explicit (blocking) dispatch of data before launch
+        // Copying the buffers to the GPU
         cl::copy(queue, std::begin(vec1), std::end(vec1), buf_vec1);
         cl::copy(queue, std::begin(vec2), std::end(vec2), buf_vec2);
-        cl::copy(queue, std::begin(result_vec), std::end(result_vec), buf_result_vec);
+        cl::copy(queue, std::begin(vec3), std::end(vec3), buf_vec3);
 
-        // Launching the kernels
-        dot_product(cl::EnqueueArgs{queue, cl::NDRange{vec1.size()}}, buf_vec1, buf_vec2, buf_result_vec);
-
-        // Finishing the kernels
-        cl::finish();
-
-        // (Blocking) fetch of results
-        cl::copy(queue, buf_result_vec, std::begin(result_vec), std::end(result_vec));
-        cl::copy(queue, std::begin(result_vec), std::end(result_vec), buf_result_vec);
-
-// ############################################################################ 
-// Launching the kernels for summing up the result_vec
-
-        // Calculating the number of iterations
-        int num_of_it =  floor( log(size)/log(256) );
+// ############################################################################
 
         // Every loop reduces the data to size()/256 till the final result is a scalar
-        for (int i=0; i < num_of_it + 1; ++i)
+        for (int i=0; i <= num_of_it; ++i)
         {
-            if(result_vec.size() % workgroupsize != 0)
-            {
-                // First we need to fill up the vectors with zeros, so the size() is divisible by 256
-                int zeros_to_fill2 = workgroupsize - (result_vec.size() % workgroupsize);
-                std::vector<float> vec_zeros2(zeros_to_fill2, 0.0f);
-                result_vec.insert( result_vec.end(), vec_zeros2.begin(), vec_zeros2.end() );
-            }
-
-            // Creating a temporary vector to store the temporary results
-            std::vector<float> result_temp(result_vec.size(), 0.0f);
-
-            // Creating the buffers and copying the to the GPU
-            cl::Buffer buf_result {std::begin(result_vec), std::end(result_vec), true };
-            cl::Buffer buf_result_temp {std::begin(result_temp), std::end(result_temp), false };
-
-            cl::copy(queue, std::begin(result_vec), std::end(result_vec), buf_result_vec);
-            cl::copy(queue, std::begin(result_temp), std::end(result_temp), buf_result_temp);
-
-            // Launching the kernels
-            reduction(cl::EnqueueArgs{queue, cl::NDRange{vec1.size()}, cl::NDRange{workgroupsize}}, buf_result, buf_result_temp, cl::Local(workgroupsize*sizeof(float)));
-            
-            // Finishing the kernels
-            cl::finish();
-
-            // (Blocking) fetch of results
-            cl::copy(queue, buf_result_temp, std::begin(result_temp), std::end(result_temp));
-
-            result_vec = result_temp;       
-
-            if(i == num_of_it)
-            {
-                cl::copy(queue, buf_result_temp, std::begin(final_res), std::end(final_res)); 
-            }
-            
+            reduction(cl::EnqueueArgs{queue, cl::NDRange{size_vec[i]}, cl::NDRange{workgroupsize}}, buf_vec1, buf_vec2, buf_vec3, cl::Local(workgroupsize*sizeof(float)), i, size_vec[i], zeros[i]);
         }
 
+        // Copying back the results
+        if(num_of_it % 2 )
+        {
+            cl::copy(queue, buf_vec1, std::begin(vec3), std::end(vec3));
+        }
+
+        else
+        {
+            cl::copy(queue, buf_vec3, std::begin(vec3), std::end(vec3));
+        }
+
+        // Stopping the clock
         auto time_gpu_end = std::chrono::high_resolution_clock::now();
 
 // ############################################################################ 
@@ -168,13 +149,13 @@ int main()
 // ############################################################################ 
 // Calculating the time differences and printing the results
 
-        auto time_difference_cpu = std::chrono::duration_cast<std::chrono::microseconds>(time_gpu_end-time_gpu_start).count()/1000.0;  
-        auto time_difference_gpu = std::chrono::duration_cast<std::chrono::microseconds>(time_cpu_end-time_cpu_start).count()/1000.0;  
+        auto time_difference_cpu = std::chrono::duration_cast<std::chrono::microseconds>(time_cpu_end-time_cpu_start).count()/1000.0;  
+        auto time_difference_gpu = std::chrono::duration_cast<std::chrono::microseconds>(time_gpu_end-time_gpu_start).count()/1000.0;  
 
         std::cout << std::fixed << std::setprecision(10);
 
         std::cout << std::endl << "The CPU result is: " << cpu_result << ".";
-        std::cout << std::endl << "The GPU result is: " << final_res[0] << ".";
+        std::cout << std::endl << "The GPU result is: " << vec3[0] << ".";
 
         std::cout << std::fixed << std::setprecision(0) << std::endl;
 
@@ -183,7 +164,7 @@ int main()
 
         float max_acc_diff = 1e-4;
         
-        if (abs(final_res[0] - cpu_result) < max_acc_diff)
+        if (abs(vec3[0] - cpu_result) < max_acc_diff)
         {
             std::cout << std::endl << "The results are the same with respect to the given tolerance!" << std::endl;
         }
