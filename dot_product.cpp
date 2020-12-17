@@ -23,7 +23,7 @@ int main()
         cl::Device device = queue.getInfo<CL_QUEUE_DEVICE>();
 
         // Load program source
-        std::ifstream file2{ "C:/Users/haffn/Desktop/MSc-III/GPU-II/Projects/first project/red.cl" };
+        std::ifstream file2{ "C:/Users/haffn/Desktop/MSc-III/GPU-II/Projects/first project/first project - temp/red.cl" };
 
         // if program failed to open
         if (!file2.is_open())
@@ -36,18 +36,18 @@ int main()
         reduction_kernel.build({ device });
 
         // Creating the kernel
-        auto reduction = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl::LocalSpaceArg, int, int, int>(reduction_kernel, "reduction");
+        auto reduction = cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::LocalSpaceArg, int, int, int>(reduction_kernel, "reduction");
 
 // ############################################################################ 
 // Creating the vectors, constants and buffers for the calcualtions
 
         // Creating the required variables
-        constexpr int size = 11111111;
+        constexpr int size = 256*256*256;
         constexpr int workgroupsize = 256;
         float cpu_result = 0;
         int zeros_to_fill = workgroupsize - (size % workgroupsize);
-        int temp_zeros;
-        int temp_size;
+        size_t temp_zeros;
+        size_t temp_size;
         size_t newsize;
 
         // Creating the vectors
@@ -76,12 +76,11 @@ int main()
         // Creating the buffers
         cl::Buffer buf_vec1 {std::begin(vec1), std::end(vec1), true };
         cl::Buffer buf_vec2 {std::begin(vec2), std::end(vec2), true };
-        cl::Buffer buf_vec3 {std::begin(vec3), std::end(vec3), true };
 
 // ############################################################################
-//Calculating the iterations and the 0s we have to fil lthe results up with
+//Calculating the iterations and the number of zeros we have to append
 
-        int num_of_it =  ceil( log(size)/log(workgroupsize) );
+        int num_of_it =  (int)ceil( log(size)/log(workgroupsize) );
 
         zeros.push_back(0);
         zeros.push_back(0);
@@ -94,12 +93,10 @@ int main()
             temp_zeros = workgroupsize - (newsize % workgroupsize);
             temp_size = newsize + temp_zeros;
 
-            zeros.push_back(temp_zeros);
+            zeros.push_back((int)temp_zeros);
             size_vec.push_back(temp_size);
         }
 
-        //zeros.push_back(254);
-        //size_vec.push_back(256);
 
 // ############################################################################
 // Calling the kernels
@@ -110,25 +107,22 @@ int main()
         // Copying the buffers to the GPU
         cl::copy(queue, std::begin(vec1), std::end(vec1), buf_vec1);
         cl::copy(queue, std::begin(vec2), std::end(vec2), buf_vec2);
-        cl::copy(queue, std::begin(vec3), std::end(vec3), buf_vec3);
-
-// ############################################################################
 
         // Every loop reduces the data to size()/256 till the final result is a scalar
         for (int i=0; i <= num_of_it; ++i)
         {
-            reduction(cl::EnqueueArgs{queue, cl::NDRange{size_vec[i]}, cl::NDRange{workgroupsize}}, buf_vec1, buf_vec2, buf_vec3, cl::Local(workgroupsize*sizeof(float)), i, size_vec[i], zeros[i]);
+            reduction(cl::EnqueueArgs{queue, cl::NDRange{size_vec[i]}, cl::NDRange{workgroupsize}}, buf_vec1, buf_vec2, cl::Local(workgroupsize*sizeof(float)), i, (int)size_vec[i], (int)zeros[i]);
         }
 
         // Copying back the results
         if(num_of_it % 2 )
         {
-            cl::copy(queue, buf_vec1, std::begin(vec3), std::end(vec3));
+            cl::copy(queue, buf_vec1, std::begin(vec3), std::begin(vec3)+1);
         }
 
         else
         {
-            cl::copy(queue, buf_vec3, std::begin(vec3), std::end(vec3));
+            cl::copy(queue, buf_vec2, std::begin(vec3), std::begin(vec3)+1);
         }
 
         // Stopping the clock
@@ -162,7 +156,7 @@ int main()
         std::cout << std::endl << "The computational time for a " << size << " long vector dot product on the CPU: " << time_difference_cpu  << " milisec.";
         std::cout << std::endl << "The computational time for a " << size << " long vector dot product on the GPU: " << time_difference_gpu  << " milisec." << std::endl;
 
-        float max_acc_diff = 1e-4;
+        float max_acc_diff = 0.01f;
         
         if (abs(vec3[0] - cpu_result) < max_acc_diff)
         {
@@ -200,7 +194,7 @@ int main()
         std::cerr << error.what() << "(" << error.err() << ")" << std::endl;
         std::exit(error.err());
     }
-    catch (std::exception& error) // If STL/CRT error occurs
+    catch (std::exception& error) // If STL/CRT error occursk
     {
         std::cerr << error.what() << std::endl;
         std::exit(EXIT_FAILURE);
